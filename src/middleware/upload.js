@@ -3,7 +3,10 @@ const fs = require('fs');
 const crypto = require('crypto');
 const multer = require('multer');
 
-const UPLOAD_DIR = path.join(__dirname, '..', '..', process.env.UPLOAD_DIR || 'uploads');
+const ROOT = path.join(__dirname, '..', '..');
+const UPLOAD_ENV = process.env.UPLOAD_DIR || 'uploads';
+// Роҳи мутлақ (диски доимии Render) ё нисбӣ (реши лоиҳа)
+const UPLOAD_DIR = path.isAbsolute(UPLOAD_ENV) ? UPLOAD_ENV : path.join(ROOT, UPLOAD_ENV);
 const MAX_MB = Number(process.env.MAX_UPLOAD_MB || 15);
 
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });

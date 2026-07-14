@@ -1,0 +1,46 @@
+# Render Blueprint — деплойи худкор.
+# Дар Render: New + → Blueprint → репозиторийро интихоб кунед → Apply.
+#
+# ЭЗОҲ дар бораи диск (persistence):
+#   - Плани FREE диски доимӣ надорад — data.db ва uploads/ баъди ҳар
+#     redeploy/restart нав мешаванд (барои demo мувофиқ).
+#   - Барои нигоҳдории доимӣ: plan-ро ба "starter" (пулакӣ) иваз кунед ва
+#     блоки "disk"-и поёнро аз comment бароред + DATA_DIR/UPLOAD_DIR-ро
+#     ба /var/data равона кунед.
+
+services:
+  - type: web
+    name: backend-insta
+    runtime: node
+    plan: free
+    region: frankfurt          # ё oregon/singapore — ба худ мувофиқ кунед
+    branch: main
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: JWT_SECRET
+        generateValue: true    # Render худаш secret-и тасодуфӣ месозад
+      - key: JWT_EXPIRES_IN
+        value: 7d
+      - key: CLIENT_ORIGIN
+        value: "*"             # баъдтар ба домени фронтенди худ маҳдуд кунед
+      - key: MAX_UPLOAD_MB
+        value: "15"
+      - key: VOICE_MAX_SECONDS
+        value: "60"
+
+      # --- Барои диски доимӣ (танҳо бо плани пулакӣ) ---
+      # - key: DATA_DIR
+      #   value: /var/data
+      # - key: UPLOAD_DIR
+      #   value: /var/data/uploads
+
+    # --- Диски доимӣ (uncomment кунед, агар plan != free бошад) ---
+    # disk:
+    #   name: data
+    #   mountPath: /var/data
+    #   sizeGB: 1

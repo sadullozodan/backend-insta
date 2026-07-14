@@ -125,6 +125,26 @@ const socket = io('http://localhost:4000', { auth: { token } });
 
 ---
 
+## Деплой дар Render
+
+Лоиҳа `render.yaml` (Blueprint) дорад — деплой якзарба мешавад.
+
+1. Ба [render.com](https://render.com) ворид шавед (бо GitHub).
+2. **New +** → **Blueprint** → репозиторийи `backend-insta`-ро интихоб кунед.
+3. Render `render.yaml`-ро мехонад → **Apply**. `JWT_SECRET` худкор сохта мешавад.
+4. Баъди build, URL мегиред: `https://backend-insta-XXXX.onrender.com`
+   - Тест: `https://<URL>/api/health` → `{"ok":true}`
+
+**Муҳим — persistence:**
+- Плани **free** диски доимӣ надорад → `data.db` ва `uploads/` баъди ҳар
+  restart/redeploy нав мешаванд (барои demo хуб аст).
+- Барои нигоҳдории доимӣ: дар `render.yaml` `plan`-ро ба `starter` иваз кунед,
+  блоки `disk`-ро uncomment кунед ва env `DATA_DIR=/var/data`,
+  `UPLOAD_DIR=/var/data/uploads` илова кунед.
+- Плани free баъди ~15 дақ бекорӣ "хоб" меравад; дархости аввал сует мешавад.
+
+Тағйиротро `git push` кунед → Render автоматӣ дубора деплой мекунад (`autoDeploy`).
+
 ## Сохтори лоиҳа
 ```
 server.js                 — оғоз (HTTP + Socket.IO)
