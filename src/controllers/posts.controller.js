@@ -4,10 +4,10 @@ const { fileUrl } = require('../middleware/upload');
 const { notify } = require('../services/notify');
 
 // Пости ягонаро бо статистика барои корбари ҷорӣ бармегардонад
-function enrichPost(row, meId) {
-  const likes = db.prepare('SELECT COUNT(*) c FROM likes WHERE post_id = ?').get(row.id).c;
-  const comments = db.prepare('SELECT COUNT(*) c FROM comments WHERE post_id = ?').get(row.id).c;
-  const liked = !!db.prepare('SELECT 1 FROM likes WHERE post_id = ? AND user_id = ?').get(row.id, meId);
+async function enrichPost(row, meId) {
+  const likes = Number((await db.one('SELECT COUNT(*) c FROM likes WHERE post_id = $1', [row.id])).c);
+  const comments = Number((await db.one('SELECT COUNT(*) c FROM comments WHERE post_id = $1', [row.id])).c);
+  const liked = !!(await db.one('SELECT 1 FROM likes WHERE post_id = $1 AND user_id = $2', [row.id, meId]));
   return {
     id: row.id,
     caption: row.caption,
@@ -26,83 +26,87 @@ function enrichPost(row, meId) {
   };
 }
 
+const enrichAll = (rows, meId) => Promise.all(rows.map((r) => enrichPost(r, meId)));
+
 const POST_SELECT = `
   SELECT p.*, u.username, u.full_name, u.avatar_url, u.is_online
     FROM posts p JOIN users u ON u.id = p.user_id`;
 
 // POST /api/posts  (multipart: field "image" ихтиёрӣ, caption дар body)
-function createPost(req, res) {
+async function createPost(req, res) {
   const caption = (req.body && req.body.caption) || '';
   const imageUrl = req.file ? fileUrl(req, req.file.filename) : null;
-  const info = db
-    .prepare('INSERT INTO posts (user_id, caption, image_url) VALUES (?, ?, ?)')
-    .run(req.user.id, caption, imageUrl);
-  const row = db.prepare(`${POST_SELECT} WHERE p.id = ?`).get(info.lastInsertRowid);
-  res.status(201).json({ post: enrichPost(row, req.user.id) });
+  const inserted = await db.one(
+    'INSERT INTO posts (user_id, caption, image_url) VALUES ($1, $2, $3) RETURNING id',
+    [req.user.id, caption, imageUrl]
+  );
+  const row = await db.one(`${POST_SELECT} WHERE p.id = $1`, [inserted.id]);
+  res.status(201).json({ post: await enrichPost(row, req.user.id) });
 }
 
 // GET /api/posts/feed — постҳои корбарони обунашуда + худам
-function getFeed(req, res) {
-  const rows = db
-    .prepare(
-      `${POST_SELECT}
-        WHERE p.user_id = @me
-           OR p.user_id IN (SELECT following_id FROM follows WHERE follower_id = @me)
+async function getFeed(req, res) {
+  const rows = await db.many(
+    `${POST_SELECT}
+        WHERE p.user_id = $1
+           OR p.user_id IN (SELECT following_id FROM follows WHERE follower_id = $1)
         ORDER BY p.created_at DESC
-        LIMIT 50`
-    )
-    .all({ me: req.user.id });
-  res.json({ posts: rows.map((r) => enrichPost(r, req.user.id)) });
+        LIMIT 50`,
+    [req.user.id]
+  );
+  res.json({ posts: await enrichAll(rows, req.user.id) });
 }
 
 // GET /api/posts/:id
-function getPost(req, res) {
-  const row = db.prepare(`${POST_SELECT} WHERE p.id = ?`).get(Number(req.params.id));
+async function getPost(req, res) {
+  const row = await db.one(`${POST_SELECT} WHERE p.id = $1`, [Number(req.params.id)]);
   if (!row) return res.status(404).json({ error: 'Пост ёфт нашуд' });
-  res.json({ post: enrichPost(row, req.user.id) });
+  res.json({ post: await enrichPost(row, req.user.id) });
 }
 
 // GET /api/users/:id/posts
-function getUserPosts(req, res) {
-  const rows = db
-    .prepare(`${POST_SELECT} WHERE p.user_id = ? ORDER BY p.created_at DESC`)
-    .all(Number(req.params.id));
-  res.json({ posts: rows.map((r) => enrichPost(r, req.user.id)) });
+async function getUserPosts(req, res) {
+  const rows = await db.many(
+    `${POST_SELECT} WHERE p.user_id = $1 ORDER BY p.created_at DESC`,
+    [Number(req.params.id)]
+  );
+  res.json({ posts: await enrichAll(rows, req.user.id) });
 }
 
 // POST /api/posts/:id/like  (+ notification)
-function likePost(req, res) {
+async function likePost(req, res) {
   const postId = Number(req.params.id);
-  const post = db.prepare('SELECT * FROM posts WHERE id = ?').get(postId);
+  const post = await db.one('SELECT * FROM posts WHERE id = $1', [postId]);
   if (!post) return res.status(404).json({ error: 'Пост ёфт нашуд' });
 
-  const info = db
-    .prepare('INSERT OR IGNORE INTO likes (post_id, user_id) VALUES (?, ?)')
-    .run(postId, req.user.id);
-  if (info.changes > 0) {
-    notify({ userId: post.user_id, actorId: req.user.id, type: 'like', postId });
+  const r = await db.q(
+    'INSERT INTO likes (post_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+    [postId, req.user.id]
+  );
+  if (r.rowCount > 0) {
+    await notify({ userId: post.user_id, actorId: req.user.id, type: 'like', postId });
   }
-  const count = db.prepare('SELECT COUNT(*) c FROM likes WHERE post_id = ?').get(postId).c;
+  const count = Number((await db.one('SELECT COUNT(*) c FROM likes WHERE post_id = $1', [postId])).c);
   res.json({ liked: true, likeCount: count });
 }
 
 // DELETE /api/posts/:id/like
-function unlikePost(req, res) {
+async function unlikePost(req, res) {
   const postId = Number(req.params.id);
-  db.prepare('DELETE FROM likes WHERE post_id = ? AND user_id = ?').run(postId, req.user.id);
-  const count = db.prepare('SELECT COUNT(*) c FROM likes WHERE post_id = ?').get(postId).c;
+  await db.q('DELETE FROM likes WHERE post_id = $1 AND user_id = $2', [postId, req.user.id]);
+  const count = Number((await db.one('SELECT COUNT(*) c FROM likes WHERE post_id = $1', [postId])).c);
   res.json({ liked: false, likeCount: count });
 }
 
 // DELETE /api/posts/:id  — танҳо соҳиб ё админ
-function deletePost(req, res) {
+async function deletePost(req, res) {
   const postId = Number(req.params.id);
-  const post = db.prepare('SELECT * FROM posts WHERE id = ?').get(postId);
+  const post = await db.one('SELECT * FROM posts WHERE id = $1', [postId]);
   if (!post) return res.status(404).json({ error: 'Пост ёфт нашуд' });
   if (post.user_id !== req.user.id && !req.user.is_admin) {
     return res.status(403).json({ error: 'Иҷозат нест' });
   }
-  db.prepare('DELETE FROM posts WHERE id = ?').run(postId);
+  await db.q('DELETE FROM posts WHERE id = $1', [postId]);
   res.json({ deleted: true });
 }
 

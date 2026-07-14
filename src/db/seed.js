@@ -5,30 +5,46 @@ const db = require('../config/db');
 
 const pass = bcrypt.hashSync('password123', 10);
 
-function upsertUser(username, email, fullName, isAdmin = 0) {
-  const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(username);
+async function upsertUser(username, email, fullName, isAdmin = 0) {
+  const existing = await db.one('SELECT id FROM users WHERE username = $1', [username]);
   if (existing) return existing.id;
-  const info = db
-    .prepare('INSERT INTO users (username, email, password_hash, full_name, bio, is_admin) VALUES (?,?,?,?,?,?)')
-    .run(username, email, pass, fullName, `Салом, ман ${fullName}`, isAdmin);
-  return info.lastInsertRowid;
+  const row = await db.one(
+    `INSERT INTO users (username, email, password_hash, full_name, bio, is_admin)
+     VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+    [username, email, pass, fullName, `Салом, ман ${fullName}`, isAdmin]
+  );
+  return row.id;
 }
 
-const ali = upsertUser('ali', 'ali@example.com', 'Алӣ Раҳимов', 1);
-const zara = upsertUser('zara', 'zara@example.com', 'Зара Каримова');
-const dav = upsertUser('davron', 'davron@example.com', 'Даврон Саидов');
+async function main() {
+  await db.initDb();
 
-// Обунаҳо
-const f = db.prepare('INSERT OR IGNORE INTO follows (follower_id, following_id) VALUES (?, ?)');
-f.run(ali, zara);
-f.run(zara, ali);
-f.run(dav, ali);
+  const ali = await upsertUser('ali', 'ali@example.com', 'Алӣ Раҳимов', 1);
+  const zara = await upsertUser('zara', 'zara@example.com', 'Зара Каримова');
+  const dav = await upsertUser('davron', 'davron@example.com', 'Даврон Саидов');
 
-// Постҳо
-const p = db.prepare('INSERT INTO posts (user_id, caption) VALUES (?, ?)');
-p.run(zara, 'Аввалин пости ман 🌸');
-p.run(ali, 'Рӯзи хуб! ☀️');
+  // Обунаҳо
+  for (const [f, t] of [[ali, zara], [zara, ali], [dav, ali]]) {
+    await db.q(
+      'INSERT INTO follows (follower_id, following_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+      [f, t]
+    );
+  }
 
-console.log('✅ Seed тайёр. Логин: ali / zara / davron — парол: password123');
-console.log('   ali = админ (is_admin=1)');
-process.exit(0);
+  // Постҳо (танҳо агар холӣ бошад)
+  const cnt = Number((await db.one('SELECT COUNT(*) c FROM posts')).c);
+  if (cnt === 0) {
+    await db.q('INSERT INTO posts (user_id, caption) VALUES ($1, $2)', [zara, 'Аввалин пости ман 🌸']);
+    await db.q('INSERT INTO posts (user_id, caption) VALUES ($1, $2)', [ali, 'Рӯзи хуб! ☀️']);
+  }
+
+  console.log('✅ Seed тайёр. Логин: ali / zara / davron — парол: password123');
+  console.log('   ali = админ (is_admin=1)');
+  await db.pool.end();
+  process.exit(0);
+}
+
+main().catch((e) => {
+  console.error('❌ Seed ноком:', e.message);
+  process.exit(1);
+});

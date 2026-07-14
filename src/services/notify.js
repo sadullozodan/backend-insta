@@ -13,31 +13,29 @@ const { publicUser } = require('../utils/serialize');
  * @param {number} [p.postId]
  * @param {number} [p.commentId]
  */
-function notify({ userId, actorId, type, postId = null, commentId = null }) {
+async function notify({ userId, actorId, type, postId = null, commentId = null }) {
   if (userId === actorId) return null; // ба худ notification намефиристем
 
-  const info = db
-    .prepare(
-      `INSERT INTO notifications (user_id, actor_id, type, post_id, comment_id)
-       VALUES (?, ?, ?, ?, ?)`
-    )
-    .run(userId, actorId, type, postId, commentId);
+  const inserted = await db.one(
+    `INSERT INTO notifications (user_id, actor_id, type, post_id, comment_id)
+     VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+    [userId, actorId, type, postId, commentId]
+  );
 
-  const notif = db
-    .prepare(
-      `SELECT n.*, u.username, u.avatar_url, u.full_name, u.is_online
-         FROM notifications n JOIN users u ON u.id = n.actor_id
-        WHERE n.id = ?`
-    )
-    .get(info.lastInsertRowid);
+  const notif = await db.one(
+    `SELECT n.*, u.username, u.avatar_url, u.full_name, u.is_online
+       FROM notifications n JOIN users u ON u.id = n.actor_id
+      WHERE n.id = $1`,
+    [inserted.id]
+  );
 
   const payload = formatNotification(notif);
 
   // Real-time: худи notification + шумораи нави badge
   emitToUser(userId, 'notification:new', payload);
-  const unread = db
-    .prepare('SELECT COUNT(*) AS c FROM notifications WHERE user_id = ? AND is_read = 0')
-    .get(userId).c;
+  const unread = Number(
+    (await db.one('SELECT COUNT(*) c FROM notifications WHERE user_id = $1 AND is_read = 0', [userId])).c
+  );
   emitToUser(userId, 'notifications:count', { unread });
 
   return payload;

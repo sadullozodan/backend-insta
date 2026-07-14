@@ -1,19 +1,16 @@
 # Render Blueprint — деплойи худкор.
 # Дар Render: New + → Blueprint → репозиторийро интихоб кунед → Apply.
 #
-# ЭЗОҲ дар бораи диск (persistence):
-#   - Плани FREE диски доимӣ надорад — data.db ва uploads/ баъди ҳар
-#     redeploy/restart нав мешаванд (барои demo мувофиқ).
-#   - Барои нигоҳдории доимӣ: plan-ро ба "starter" (пулакӣ) иваз кунед ва
-#     блоки "disk"-и поёнро аз comment бароред + DATA_DIR/UPLOAD_DIR-ро
-#     ба /var/data равона кунед.
+# Базаи маълумот: PostgreSQL (доимӣ). Агар базаро аллакай дар Render сохта бошед,
+# DATABASE_URL-ро дар дашборд (Environment) ба "Internal Database URL"-и он гузоред
+# (envVar-и поён `sync: false` аст — яъне Render онро аз шумо мепурсад).
 
 services:
   - type: web
     name: backend-insta
     runtime: node
     plan: free
-    region: frankfurt          # ё oregon/singapore — ба худ мувофиқ кунед
+    region: oregon             # ҳамон региони базаатон (Postgres шумо дар Oregon аст)
     branch: main
     buildCommand: npm install
     startCommand: npm start
@@ -22,6 +19,8 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "20"
+      - key: DATABASE_URL
+        sync: false            # дар дашборд Internal Database URL-ро гузоред
       - key: JWT_SECRET
         generateValue: true    # Render худаш secret-и тасодуфӣ месозад
       - key: JWT_EXPIRES_IN
@@ -33,14 +32,6 @@ services:
       - key: VOICE_MAX_SECONDS
         value: "60"
 
-      # --- Барои диски доимӣ (танҳо бо плани пулакӣ) ---
-      # - key: DATA_DIR
-      #   value: /var/data
-      # - key: UPLOAD_DIR
-      #   value: /var/data/uploads
-
-    # --- Диски доимӣ (uncomment кунед, агар plan != free бошад) ---
-    # disk:
-    #   name: data
-    #   mountPath: /var/data
-    #   sizeGB: 1
+    # Эзоҳ: файлҳои боршуда (аватар/овоз) дар диски эфемерии free нигоҳ дошта мешаванд
+    # ва баъди redeploy нав мешаванд. Барои доимӣ — плани starter + disk илова кунед
+    # ва UPLOAD_DIR=/var/data/uploads гузоред. (Маълумоти асосӣ дар Postgres доимист.)

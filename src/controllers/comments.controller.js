@@ -5,20 +5,22 @@ const { notify } = require('../services/notify');
 const { REACTIONS } = require('../config/constants');
 
 // Реаксияҳои як комментро ҷамъ мекунад: { "❤️": 3 } + реаксияи ман
-function loadReactions(commentId, meId) {
-  const rows = db
-    .prepare('SELECT emoji, COUNT(*) c FROM comment_reactions WHERE comment_id = ? GROUP BY emoji')
-    .all(commentId);
+async function loadReactions(commentId, meId) {
+  const rows = await db.many(
+    'SELECT emoji, COUNT(*) c FROM comment_reactions WHERE comment_id = $1 GROUP BY emoji',
+    [commentId]
+  );
   const reactions = {};
-  rows.forEach((r) => (reactions[r.emoji] = r.c));
-  const mine = db
-    .prepare('SELECT emoji FROM comment_reactions WHERE comment_id = ? AND user_id = ?')
-    .get(commentId, meId);
+  rows.forEach((r) => (reactions[r.emoji] = Number(r.c)));
+  const mine = await db.one(
+    'SELECT emoji FROM comment_reactions WHERE comment_id = $1 AND user_id = $2',
+    [commentId, meId]
+  );
   return { reactions, myReaction: mine ? mine.emoji : null };
 }
 
-function hydrate(row, meId) {
-  const { reactions, myReaction } = loadReactions(row.id, meId);
+async function hydrate(row, meId) {
+  const { reactions, myReaction } = await loadReactions(row.id, meId);
   return commentOut({ ...row, reactions, my_reaction: myReaction });
 }
 
@@ -27,17 +29,19 @@ const C_SELECT = `
     FROM comments c JOIN users u ON u.id = c.user_id`;
 
 // GET /api/posts/:id/comments
-function listComments(req, res) {
-  const rows = db
-    .prepare(`${C_SELECT} WHERE c.post_id = ? ORDER BY c.created_at ASC`)
-    .all(Number(req.params.id));
-  res.json({ comments: rows.map((r) => hydrate(r, req.user.id)) });
+async function listComments(req, res) {
+  const rows = await db.many(
+    `${C_SELECT} WHERE c.post_id = $1 ORDER BY c.created_at ASC`,
+    [Number(req.params.id)]
+  );
+  const comments = await Promise.all(rows.map((r) => hydrate(r, req.user.id)));
+  res.json({ comments });
 }
 
 // POST /api/posts/:id/comments  (text дар body ё файли "voice")
-function createComment(req, res) {
+async function createComment(req, res) {
   const postId = Number(req.params.id);
-  const post = db.prepare('SELECT * FROM posts WHERE id = ?').get(postId);
+  const post = await db.one('SELECT * FROM posts WHERE id = $1', [postId]);
   if (!post) return res.status(404).json({ error: 'Пост ёфт нашуд' });
 
   const text = (req.body && req.body.text) || null;
@@ -49,23 +53,22 @@ function createComment(req, res) {
     return res.status(400).json({ error: 'text ё паёми овозӣ (voice) лозим аст' });
   }
 
-  const info = db
-    .prepare(
-      `INSERT INTO comments (post_id, user_id, parent_id, text, voice_url, voice_secs)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    )
-    .run(postId, req.user.id, parentId, text, voiceUrl, voiceSecs);
+  const inserted = await db.one(
+    `INSERT INTO comments (post_id, user_id, parent_id, text, voice_url, voice_secs)
+     VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+    [postId, req.user.id, parentId, text, voiceUrl, voiceSecs]
+  );
 
-  notify({ userId: post.user_id, actorId: req.user.id, type: 'comment', postId, commentId: info.lastInsertRowid });
+  await notify({ userId: post.user_id, actorId: req.user.id, type: 'comment', postId, commentId: inserted.id });
 
-  const row = db.prepare(`${C_SELECT} WHERE c.id = ?`).get(info.lastInsertRowid);
-  res.status(201).json({ comment: hydrate(row, req.user.id) });
+  const row = await db.one(`${C_SELECT} WHERE c.id = $1`, [inserted.id]);
+  res.status(201).json({ comment: await hydrate(row, req.user.id) });
 }
 
 // PATCH /api/comments/:id  — танҳо соҳиб; edited_at гузошта мешавад
-function editComment(req, res) {
+async function editComment(req, res) {
   const id = Number(req.params.id);
-  const c = db.prepare('SELECT * FROM comments WHERE id = ?').get(id);
+  const c = await db.one('SELECT * FROM comments WHERE id = $1', [id]);
   if (!c) return res.status(404).json({ error: 'Коммент ёфт нашуд' });
   if (c.user_id !== req.user.id) {
     return res.status(403).json({ error: 'Танҳо комменти худро таҳрир карда метавонед' });
@@ -73,47 +76,48 @@ function editComment(req, res) {
   const { text } = req.body || {};
   if (text == null || text === '') return res.status(400).json({ error: 'text лозим аст' });
 
-  db.prepare("UPDATE comments SET text = ?, edited_at = datetime('now') WHERE id = ?").run(text, id);
-  const row = db.prepare(`${C_SELECT} WHERE c.id = ?`).get(id);
-  res.json({ comment: hydrate(row, req.user.id) }); // edited=true
+  await db.q('UPDATE comments SET text = $1, edited_at = now() WHERE id = $2', [text, id]);
+  const row = await db.one(`${C_SELECT} WHERE c.id = $1`, [id]);
+  res.json({ comment: await hydrate(row, req.user.id) }); // edited=true
 }
 
 // DELETE /api/comments/:id — соҳиб ё админ/модератор
-function deleteComment(req, res) {
+async function deleteComment(req, res) {
   const id = Number(req.params.id);
-  const c = db.prepare('SELECT * FROM comments WHERE id = ?').get(id);
+  const c = await db.one('SELECT * FROM comments WHERE id = $1', [id]);
   if (!c) return res.status(404).json({ error: 'Коммент ёфт нашуд' });
   if (c.user_id !== req.user.id && !req.user.is_admin) {
     return res.status(403).json({ error: 'Иҷозат нест' });
   }
-  db.prepare('DELETE FROM comments WHERE id = ?').run(id);
+  await db.q('DELETE FROM comments WHERE id = $1', [id]);
   res.json({ deleted: true });
 }
 
 // PUT /api/comments/:id/reaction  { emoji }  — реаксия гузоштан/иваз кардан
-function reactComment(req, res) {
+async function reactComment(req, res) {
   const id = Number(req.params.id);
   const { emoji } = req.body || {};
   if (!REACTIONS.includes(emoji)) {
     return res.status(400).json({ error: 'Реаксияи иҷозатдодашуда нест', allowed: REACTIONS });
   }
-  const c = db.prepare('SELECT * FROM comments WHERE id = ?').get(id);
+  const c = await db.one('SELECT * FROM comments WHERE id = $1', [id]);
   if (!c) return res.status(404).json({ error: 'Коммент ёфт нашуд' });
 
-  db.prepare(
-    `INSERT INTO comment_reactions (comment_id, user_id, emoji) VALUES (?, ?, ?)
-     ON CONFLICT (comment_id, user_id) DO UPDATE SET emoji = excluded.emoji`
-  ).run(id, req.user.id, emoji);
+  await db.q(
+    `INSERT INTO comment_reactions (comment_id, user_id, emoji) VALUES ($1, $2, $3)
+     ON CONFLICT (comment_id, user_id) DO UPDATE SET emoji = excluded.emoji`,
+    [id, req.user.id, emoji]
+  );
 
-  notify({ userId: c.user_id, actorId: req.user.id, type: 'reaction', postId: c.post_id, commentId: id });
-  res.json(loadReactions(id, req.user.id));
+  await notify({ userId: c.user_id, actorId: req.user.id, type: 'reaction', postId: c.post_id, commentId: id });
+  res.json(await loadReactions(id, req.user.id));
 }
 
 // DELETE /api/comments/:id/reaction — реаксияро бардоштан
-function unreactComment(req, res) {
+async function unreactComment(req, res) {
   const id = Number(req.params.id);
-  db.prepare('DELETE FROM comment_reactions WHERE comment_id = ? AND user_id = ?').run(id, req.user.id);
-  res.json(loadReactions(id, req.user.id));
+  await db.q('DELETE FROM comment_reactions WHERE comment_id = $1 AND user_id = $2', [id, req.user.id]);
+  res.json(await loadReactions(id, req.user.id));
 }
 
 module.exports = {

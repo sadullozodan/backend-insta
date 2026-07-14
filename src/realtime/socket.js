@@ -17,12 +17,11 @@ function emitToUser(userId, event, payload) {
   io.to(`user:${userId}`).emit(event, payload);
 }
 
-function setUserOnline(userId, on) {
-  const now = new Date().toISOString();
-  db.prepare('UPDATE users SET is_online = ?, last_seen_at = ? WHERE id = ?')
-    .run(on ? 1 : 0, now, userId);
+async function setUserOnline(userId, on) {
+  const now = new Date();
+  await db.q('UPDATE users SET is_online = $1, last_seen_at = $2 WHERE id = $3', [on ? 1 : 0, now, userId]);
   // Ба ҳамаи корбарон хабар медиҳем (нуқтаи сабз/хокистарӣ)
-  if (io) io.emit('presence:update', { userId, isOnline: on, lastSeenAt: now });
+  if (io) io.emit('presence:update', { userId, isOnline: on, lastSeenAt: now.toISOString() });
 }
 
 function init(server, corsOrigin) {
@@ -43,7 +42,7 @@ function init(server, corsOrigin) {
     }
   });
 
-  io.on('connection', (socket) => {
+  io.on('connection', async (socket) => {
     const userId = socket.userId;
     socket.join(`user:${userId}`);
 
@@ -51,41 +50,49 @@ function init(server, corsOrigin) {
     if (!online.has(userId)) online.set(userId, new Set());
     const wasOffline = online.get(userId).size === 0;
     online.get(userId).add(socket.id);
-    if (wasOffline) setUserOnline(userId, true);
+    if (wasOffline) setUserOnline(userId, true).catch((e) => console.error(e.message));
 
     // Ба худи корбар шумораи badge-и ҷориро мефиристем
-    const unread = db
-      .prepare('SELECT COUNT(*) AS c FROM notifications WHERE user_id = ? AND is_read = 0')
-      .get(userId).c;
-    socket.emit('notifications:count', { unread });
+    try {
+      const row = await db.one(
+        'SELECT COUNT(*) c FROM notifications WHERE user_id = $1 AND is_read = 0',
+        [userId]
+      );
+      socket.emit('notifications:count', { unread: Number(row.c) });
+    } catch (e) {
+      console.error(e.message);
+    }
 
     // --- Typing indicator ("менависад...") ---
     // Барои чат: { conversationId } | Барои коммент: { postId }
-    socket.on('typing:start', (data = {}) => {
-      broadcastTyping(socket, data, true);
-    });
-    socket.on('typing:stop', (data = {}) => {
-      broadcastTyping(socket, data, false);
-    });
+    socket.on('typing:start', (data = {}) => broadcastTyping(socket, data, true));
+    socket.on('typing:stop', (data = {}) => broadcastTyping(socket, data, false));
 
     // --- Seen (галочкаҳо) ---
     // Корбар паёмҳоро дид => дар DB seen_at гузошта, ба фиристанда хабар медиҳем
-    socket.on('messages:seen', (data = {}) => {
+    socket.on('messages:seen', async (data = {}) => {
       const { conversationId } = data;
       if (!conversationId) return;
-      const now = new Date().toISOString();
-      const info = db
-        .prepare(
-          `UPDATE messages SET seen_at = ?
-           WHERE conversation_id = ? AND sender_id != ? AND seen_at IS NULL`
-        )
-        .run(now, conversationId, userId);
-      if (info.changes > 0) {
-        const conv = db.prepare('SELECT * FROM conversations WHERE id = ?').get(conversationId);
-        if (conv) {
-          const other = conv.user_a === userId ? conv.user_b : conv.user_a;
-          emitToUser(other, 'messages:seen', { conversationId, seenBy: userId, seenAt: now });
+      try {
+        const now = new Date();
+        const r = await db.q(
+          `UPDATE messages SET seen_at = $1
+            WHERE conversation_id = $2 AND sender_id != $3 AND seen_at IS NULL`,
+          [now, conversationId, userId]
+        );
+        if (r.rowCount > 0) {
+          const conv = await db.one('SELECT * FROM conversations WHERE id = $1', [conversationId]);
+          if (conv) {
+            const other = conv.user_a === userId ? conv.user_b : conv.user_a;
+            emitToUser(other, 'messages:seen', {
+              conversationId,
+              seenBy: userId,
+              seenAt: now.toISOString(),
+            });
+          }
         }
+      } catch (e) {
+        console.error(e.message);
       }
     });
 
@@ -96,7 +103,7 @@ function init(server, corsOrigin) {
         set.delete(socket.id);
         if (set.size === 0) {
           online.delete(userId);
-          setUserOnline(userId, false);
+          setUserOnline(userId, false).catch((e) => console.error(e.message));
         }
       }
     });
@@ -105,18 +112,21 @@ function init(server, corsOrigin) {
   return io;
 }
 
-function broadcastTyping(socket, data, isTyping) {
+async function broadcastTyping(socket, data, isTyping) {
   const userId = socket.userId;
   const event = isTyping ? 'typing:start' : 'typing:stop';
-
-  if (data.conversationId) {
-    const conv = db.prepare('SELECT * FROM conversations WHERE id = ?').get(data.conversationId);
-    if (!conv) return;
-    const other = conv.user_a === userId ? conv.user_b : conv.user_a;
-    emitToUser(other, event, { conversationId: data.conversationId, userId });
-  } else if (data.postId) {
-    // Ба ҳамаи тамошобинони пост (ба ҷуз худаш)
-    socket.broadcast.emit(event, { postId: data.postId, userId });
+  try {
+    if (data.conversationId) {
+      const conv = await db.one('SELECT * FROM conversations WHERE id = $1', [data.conversationId]);
+      if (!conv) return;
+      const other = conv.user_a === userId ? conv.user_b : conv.user_a;
+      emitToUser(other, event, { conversationId: data.conversationId, userId });
+    } else if (data.postId) {
+      // Ба ҳамаи тамошобинони пост (ба ҷуз худаш)
+      socket.broadcast.emit(event, { postId: data.postId, userId });
+    }
+  } catch (e) {
+    console.error(e.message);
   }
 }
 

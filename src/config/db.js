@@ -1,24 +1,41 @@
 const path = require('path');
 const fs = require('fs');
-const Database = require('better-sqlite3');
+const { Pool } = require('pg');
 
-// DATA_DIR — барои Render/production метавон онро ба диски доимӣ (масалан /var/data)
-// равона кард, то data.db баъди redeploy гум нашавад. Пешфарз: реши лоиҳа.
-const ROOT = path.join(__dirname, '..', '..');
-const DATA_DIR = process.env.DATA_DIR
-  ? (path.isAbsolute(process.env.DATA_DIR) ? process.env.DATA_DIR : path.join(ROOT, process.env.DATA_DIR))
-  : ROOT;
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+const DATABASE_URL = process.env.DATABASE_URL;
+if (!DATABASE_URL) {
+  console.error('❌ DATABASE_URL танзим нашудааст. Онро дар .env гузоред.');
+  process.exit(1);
+}
 
-const DB_PATH = path.join(DATA_DIR, 'data.db');
-const SCHEMA_PATH = path.join(__dirname, '..', 'db', 'schema.sql');
+// Render Postgres SSL талаб мекунад. Дар локал ҳам зарар надорад.
+const ssl = process.env.DB_NO_SSL === '1' ? false : { rejectUnauthorized: false };
 
-const db = new Database(DB_PATH);
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+const pool = new Pool({ connectionString: DATABASE_URL, ssl });
 
-// Схемаро дар оғоз татбиқ мекунем (idempotent — CREATE TABLE IF NOT EXISTS)
-const schema = fs.readFileSync(SCHEMA_PATH, 'utf8');
-db.exec(schema);
+pool.on('error', (err) => console.error('Хатои pool-и Postgres:', err.message));
 
-module.exports = db;
+// --- Помощникҳо (helpers) ---
+// q    — натиҷаи хом (rowCount, rows)
+// one  — сатри якум ё null
+// many — ҳамаи сатрҳо
+async function q(text, params) {
+  return pool.query(text, params);
+}
+async function one(text, params) {
+  const r = await pool.query(text, params);
+  return r.rows[0] || null;
+}
+async function many(text, params) {
+  const r = await pool.query(text, params);
+  return r.rows;
+}
+
+// Схемаро дар оғоз татбиқ мекунад (idempotent — CREATE TABLE IF NOT EXISTS)
+async function initDb() {
+  const schema = fs.readFileSync(path.join(__dirname, '..', 'db', 'schema.sql'), 'utf8');
+  await pool.query(schema);
+  console.log('✅ Схемаи Postgres тайёр');
+}
+
+module.exports = { pool, q, one, many, initDb };
