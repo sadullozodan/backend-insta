@@ -1,13 +1,19 @@
 # backend-insta
 
-Бекенди Instagram-монанд бо **Node.js + Express + Socket.IO + SQLite**.
+Бекенди Instagram-монанд бо **Node.js + Express + Socket.IO + PostgreSQL**.
 Ҳама амалҳои корбар доимӣ (persistent) захира мешаванд ва features-и real-time
 (онлайн, typing, seen, notification) тавассути Socket.IO кор мекунанд.
+
+## 🌐 Зинда (Live)
+- **API:** https://backend-insta-jma5.onrender.com
+- **Swagger UI (ҳуҷҷати интерактивӣ):** https://backend-insta-jma5.onrender.com/docs
+- Логинҳои намунавӣ (парол `password123`): `ali` (админ), `zara`, `davron`
 
 ## Технологияҳо
 - **Express** — REST API
 - **Socket.IO** — real-time (online status, typing, seen, live notification)
-- **better-sqlite3** — базаи маълумот (файли `data.db`)
+- **PostgreSQL** (драйвери `pg`) — базаи маълумоти доимӣ
+- **swagger-ui-express** — ҳуҷҷати API дар `/docs`
 - **multer** — боркунии аватар ва паёми овозӣ ба папкаи `uploads/`
 - **JWT + bcrypt** — аутентификатсия
 

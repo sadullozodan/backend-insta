@@ -1,8 +1,9 @@
-const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
+const swaggerUi = require('swagger-ui-express');
 const routes = require('./routes');
+const openapiSpec = require('./config/openapi');
 const { UPLOAD_DIR } = require('./middleware/upload');
 
 const app = express();
@@ -15,7 +16,18 @@ app.use(morgan('dev'));
 // Файлҳои боршуда (аватар, паёми овозӣ) — статикӣ
 app.use('/uploads', express.static(UPLOAD_DIR));
 
-app.get('/', (req, res) => res.json({ ok: true, name: 'backend-insta', api: '/api' }));
+// Swagger UI — ҳуҷҷати интерактивии API
+app.get('/openapi.json', (req, res) => res.json(openapiSpec));
+app.use(
+  '/docs',
+  swaggerUi.serve,
+  swaggerUi.setup(openapiSpec, {
+    customSiteTitle: 'backend-insta API',
+    swaggerOptions: { persistAuthorization: true },
+  })
+);
+
+app.get('/', (req, res) => res.json({ ok: true, name: 'backend-insta', api: '/api', docs: '/docs' }));
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 
 app.use('/api', routes);
